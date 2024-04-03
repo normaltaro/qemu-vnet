@@ -4,6 +4,8 @@
 QEMU will use these scripts to setup/destroy virtual networks when starting/ending a Guest when `-netdev tap` or `-net tap` flags are used.
 The Virtual Network uses NAT when Guests attempt to access the Host network. The NAT setup relies on `iptables` postrouting.
 
+The Host can communicate with Guest's Virtual Network/IP, Guests can also communicate with Host's Network/IP.
+
 See: <https://wiki.qemu.org/Documentation/Networking/NAT>
 
 The script in the link above used `ifconfig`, `brctl`, and a weird way to insert `iptables` rules. It also used `dd`. The script masqueraded source of all Virtual Network packets.
