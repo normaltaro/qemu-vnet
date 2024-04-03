@@ -1,0 +1,60 @@
+#!/bin/sh
+
+# Should be same as qemu-ifup
+BRIDGE=natbr0
+NETWORK=192.168.53.0
+NETMASK=255.255.255.0
+
+check_bridge() {
+    # if the bridge is alive, return the number of taps it enslaved
+    if ip link show "$1" > /dev/null 2>&1; then
+	echo "$(bridge link show master $1 | wc -l)"
+    else
+        echo "0"
+    fi
+}
+
+remove_iptables_rules() {
+    # Remove NAT rules
+    iptables -t nat -D POSTROUTING -s "$NETWORK/$NETMASK" -d "$NETWORK/$NETMASK" -j ACCEPT
+    iptables -t nat -D POSTROUTING -s "$NETWORK/$NETMASK" -j MASQUERADE
+    # Remove Filter rules
+    iptables -D INPUT -i "$BRIDGE" -p tcp -m tcp --dport 67 -j ACCEPT 
+    iptables -D INPUT -i "$BRIDGE" -p udp -m udp --dport 67 -j ACCEPT 
+    iptables -D INPUT -i "$BRIDGE" -p tcp -m tcp --dport 53 -j ACCEPT 
+    iptables -D INPUT -i "$BRIDGE" -p udp -m udp --dport 53 -j ACCEPT 
+
+    iptables -D FORWARD -s "$NETWORK/$NETMASK" -i "$BRIDGE" -j ACCEPT 
+    iptables -D FORWARD -d "$NETWORK/$NETMASK" -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 
+    iptables -D FORWARD -o "$BRIDGE" -j REJECT --reject-with icmp-port-unreachable 
+    iptables -D FORWARD -i "$BRIDGE" -j REJECT --reject-with icmp-port-unreachable 
+    if [ -n "$1" ]; then
+        iptables -D FORWARD -i "$1" -o "$1" -j ACCEPT
+    fi
+}
+
+stop_dnsmasq() {
+    if [ -f "/var/run/qemu-dnsmasq-$BRIDGE.pid" ]; then
+        pid=$(cat "/var/run/qemu-dnsmasq-$BRIDGE.pid")
+        if [ -n "$pid" ]; then
+            kill "$pid"
+        fi
+    fi
+}
+
+cleanup_bridge() {
+    NTAPS=$(check_bridge "$BRIDGE")
+    if [ "$NTAPS" -eq "0" ]; then
+        ip link set "$BRIDGE" down
+        ip link delete "$BRIDGE" type bridge
+        remove_iptables_rules $1
+        stop_dnsmasq
+    fi
+}
+
+if [ -n "$1" ]; then
+	ip link set "$1" down
+	ip link delete "$1" type tap
+fi
+
+cleanup_bridge "$BRIDGE"

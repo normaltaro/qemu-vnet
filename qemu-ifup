@@ -1,0 +1,79 @@
+#!/bin/bash
+
+# TODO: Auto-naming
+BRIDGE=natbr0
+
+# Network information
+NETWORK=192.168.53.0
+NETMASK=255.255.255.0
+GATEWAY=192.168.53.1
+DHCPRANGE=192.168.53.2,192.168.53.254
+
+check_bridge() {
+    if ip link show "$1" > /dev/null 2>&1; then
+        return 1
+    else
+        return 0
+    fi
+}
+
+create_bridge() {
+    ip link add "$1" type bridge
+    ip link set "$1" up
+    ip addr add "$GATEWAY/$NETMASK" dev "$1"
+}
+
+enable_ip_forward() {
+    echo 1 > /proc/sys/net/ipv4/ip_forward
+}
+
+add_iptables_rules() {
+    # NAT rules
+    iptables -t nat -A POSTROUTING -s "$NETWORK/$NETMASK" -d "$NETWORK/$NETMASK" -j ACCEPT
+    iptables -t nat -A POSTROUTING -s "$NETWORK/$NETMASK" -j MASQUERADE
+    # Filter rules
+    iptables -A INPUT -i "$BRIDGE" -p tcp -m tcp --dport 67 -j ACCEPT 
+    iptables -A INPUT -i "$BRIDGE" -p udp -m udp --dport 67 -j ACCEPT 
+    iptables -A INPUT -i "$BRIDGE" -p tcp -m tcp --dport 53 -j ACCEPT 
+    iptables -A INPUT -i "$BRIDGE" -p udp -m udp --dport 53 -j ACCEPT 
+
+    iptables -A FORWARD -i "$1" -o "$1" -j ACCEPT 
+    iptables -A FORWARD -s "$NETWORK/$NETMASK" -i "$BRIDGE" -j ACCEPT 
+    iptables -A FORWARD -d "$NETWORK/$NETMASK" -o "$BRIDGE" -m state --state RELATED,ESTABLISHED -j ACCEPT 
+    iptables -A FORWARD -o "$BRIDGE" -j REJECT --reject-with icmp-port-unreachable 
+    iptables -A FORWARD -i "$BRIDGE" -j REJECT --reject-with icmp-port-unreachable 
+}
+
+start_dnsmasq() {
+    dnsmasq \
+        --strict-order \
+        --except-interface=lo \
+        --interface="$BRIDGE" \
+        --listen-address="$GATEWAY" \
+        --bind-interfaces \
+        --dhcp-range="$DHCPRANGE" \
+        --conf-file="" \
+        --pid-file=/var/run/qemu-dnsmasq-"$BRIDGE".pid \
+        --dhcp-leasefile=/var/run/qemu-dnsmasq-"$BRIDGE".leases \
+        --dhcp-no-override \
+        ${TFTPROOT:+"--enable-tftp"} \
+        ${TFTPROOT:+"--tftp-root=$TFTPROOT"} \
+        ${BOOTP:+"--dhcp-boot=$BOOTP"}
+}
+
+setup_bridge_vlan() {
+    if check_bridge "$1" ; then
+	create_bridge "$1"
+	enable_ip_forward
+	add_iptables_rules "$1"
+	start_dnsmasq "$1"
+    fi
+}
+
+setup_bridge_vlan "$BRIDGE"
+
+if [[ -n "$1" ]]; then
+    ip addr flush dev "$1"
+    ip link set "$1" up
+    ip link set dev "$1" master "$BRIDGE"
+fi
